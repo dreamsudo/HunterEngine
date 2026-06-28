@@ -1,161 +1,164 @@
 # HunterEngine — Pocket Manual
 
-**AI-Augmented Threat Enrichment.** Paste suspicious text in, get scored findings,
-IoCs, MITRE techniques, YARA rules, and an AI analyst note out.
-
-This is the 5-minute version. For every detail, see `OPERATIONAL_MANUAL.md`.
+Quick operator reference. For full detail see **MANUAL.md**.
 
 ---
 
-## What it is, in one breath
-
-A deterministic engine scores and tags suspicious messages and writes YARA
-detection rules — **the part you can trust and explain.** An optional AI layer
-then adds a plain-English "here's why it's bad and what to do" note and can draft
-smarter YARA rules — **the part that makes it fast to act on.** The AI never
-changes the score and never auto-deploys anything. Old methods, new intelligence.
-
----
-
-## 1. Install (once)
+## Setup (once per shell)
 
 ```bash
 cd HunterEngine
-python3 -m venv .venv
-source .venv/bin/activate        # your prompt should now show (.venv)
-pip install -r requirements.txt
+source .venv/bin/activate           # REQUIRED — or pip/run will fail
 ```
 
-> On Kali/Debian, the venv is what avoids the `externally-managed-environment`
-> pip error. If your prompt doesn't show `(.venv)`, nothing else will work.
-
-First run downloads MITRE ATT&CK data (~70 MB), once. After that it's instant.
+First run downloads ATT&CK into `mitre_cache.json` (once). Stale cache? `rm mitre_cache.json`.
 
 ---
 
-## 2. Make an input file
-
-One suspicious message per line:
+## Analyze
 
 ```bash
-cat > sample.txt << 'EOF'
-URGENT: Your PayPal account was suspended. Verify at http://paypal-secure-login.evil-domain.com
-Hi team, standup at 10am tomorrow.
-Hello, this is the CFO. I need an urgent wire transfer today, updated bank details attached.
-EOF
+# deterministic only (no AI), general-purpose profile
+python3 HunterEngine.py INPUT.txt --no-ai -c primitives/merged_primitives.json
 ```
 
----
+Input = `.txt` (one item per line), `.csv`, or `.json`.
 
-## 3. Run it
+Results land in `HunterEngineBox/session_<timestamp>/`.
 
 ```bash
-python3 HunterEngine.py sample.txt --no-banner
-cat HunterEngineBox/session_*/_summary_report.md
+cat HunterEngineBox/session_*/_summary_report.md     # read the verdict
 ```
-
-You get a `HunterEngineBox/session_<timestamp>/` folder with:
-
-- `_summary_report.md` — **read this first.** Scored findings, IoCs, MITRE hits.
-- `_all_yara_rules.yara` — detection rules ready to review and deploy.
-- `_all_indicators.json` — every URL/IP/domain/email found.
-- `results.json` / `_stats.json` — full data and run stats.
-
-Risk levels: **INFO · LOW · MEDIUM · HIGH · CRITICAL**.
 
 ---
 
-## 4. Turn on the AI (optional)
+## Turn on AI advisory (optional)
 
-The AI only annotates HIGH/CRITICAL findings. It's off until you configure it.
+**Cloud** (sends text off-box — only for authorized data):
+```bash
+export HUNTER_AI_PROVIDER=anthropic
+export HUNTER_AI_MODEL=claude-sonnet-4-5
+export HUNTER_AI_ALLOW_REMOTE=1
+export HUNTER_AI_API_KEY=<key>
+python3 HunterEngine.py INPUT.txt -c primitives/merged_primitives.json
+```
 
-### Option A — local model (nothing leaves your machine)
-
+**Local** (nothing leaves the box):
 ```bash
 export HUNTER_AI_PROVIDER=openai-compatible
-export HUNTER_AI_BASE_URL=http://localhost:11434/v1   # e.g. Ollama
-export HUNTER_AI_MODEL=<your-local-model>
-python3 HunterEngine.py sample.txt --no-banner
+export HUNTER_AI_BASE_URL=http://localhost:11434/v1
+export HUNTER_AI_MODEL=llama3.1
+python3 HunterEngine.py INPUT.txt -c primitives/merged_primitives.json
 ```
 
-### Option B — cloud model (sends text to a provider — opt in on purpose)
+AI **never** changes the score. `--no-ai` forces it off.
+
+---
+
+## AI-drafted YARA (optional)
 
 ```bash
-export HUNTER_AI_PROVIDER=anthropic        # or: openai
-export HUNTER_AI_MODEL=<your-model-string>
-export HUNTER_AI_API_KEY=<key>             # set in shell only; never commit it
-export HUNTER_AI_ALLOW_REMOTE=1            # required for any cloud endpoint
-python3 HunterEngine.py sample.txt --no-banner
+pip install yara-python            # required, one time
+python3 HunterEngine.py INPUT.txt --no-ai --ai-yara -c primitives/merged_primitives.json
 ```
 
-Now `_summary_report.md` includes an **AI-Assisted Analysis** block under each
-HIGH/CRITICAL item: a summary, why it's malicious, and recommended actions.
-
-> The scores will be identical with or without AI. The AI explains the verdict;
-> it never changes it.
+Output → `_ai_yara_NEEDS_REVIEW.yara`. **Review before deploying.** Never auto-merged.
 
 ---
 
-## 5. AI-drafted YARA rules (optional, opt-in)
-
-Let the model draft detection rules. They are syntax-checked and quarantined for
-your review — never auto-deployed.
+## Build the report
 
 ```bash
-pip install yara-python                     # the mandatory compile gate
-# (keep the AI env vars from step 4)
-python3 HunterEngine.py sample.txt --no-banner --ai-yara
-cat HunterEngineBox/session_*/_ai_yara_NEEDS_REVIEW.yara
+python3 generate_report.py --all          # across all sessions
+xdg-open report_aggregate
 ```
 
-The drafted rules land in `_ai_yara_NEEDS_REVIEW.yara` behind a review banner.
-Your deployable `_all_yara_rules.yara` stays untouched. **Review before you ship
-any of them** — they compile, but they aren't validated for quality.
+Produces: 6 charts (MITRE-labelled, no message text, anonymized cases),
+`EXECUTIVE_SUMMARY.txt`, and `findings_stix_bundle.json` (STIX 2.1).
+
+| Flag | Effect |
+|------|--------|
+| `--all` | aggregate all sessions |
+| `--defang` | neutralize IoCs in STIX (`hxxp://`, `[.]`) |
+| `--no-stix` | skip STIX bundle |
+| `--out DIR` | output directory |
+
+Correlation chart only appears at **≥20 cases** (by design).
 
 ---
 
-## 6. Switch threat profiles
-
-Detection logic lives in JSON files in `primitives/`. No code changes.
+## Test the whole pipeline
 
 ```bash
-# Business email compromise
-python3 HunterEngine.py emails.csv -c primitives/bec_financial_primitives.json
-
-# Insider / data exfiltration
-python3 HunterEngine.py logs.txt -c primitives/insider_exfil_primitives.json
+./run_pipeline_test.sh
 ```
 
-Add your own keywords by editing those JSON files. See the operational manual for
-the full schema.
+Runs all 4 modes (offline / AI-YARA / cloud / local), skips any whose prereqs
+are missing, opens all artifacts.
 
 ---
 
-## 7. Handy flags
+## Visualize ATT&CK
 
-| Flag | Does |
-|---|---|
-| `--no-banner` | Quiet startup (good for scripts). |
-| `--no-ai` | Force the AI layer off, whatever the environment says. |
-| `--ai-yara` | Opt in to AI YARA drafting (needs `yara-python` + a provider). |
-| `-c <file>` | Use a specific threat profile. |
+- **Heatmap:** open `HunterEngineBox/session_*/_attack_heatmap.svg`
+- **Navigator:** upload `_attack_navigator.json` at
+  <https://mitre-attack.github.io/attack-navigator/> → *Open Existing Layer*
 
 ---
 
-## 8. If something breaks
+## Artifacts per session
 
-- **`missing library 'rapidfuzz'`** → you're not in the venv. `source .venv/bin/activate`.
-- **`externally-managed-environment`** → same fix: use the venv.
-- **`Input file not found`** → check `ls -l <file>`; the file must be where you point.
-- **AI did nothing** → set `HUNTER_AI_PROVIDER` + `HUNTER_AI_MODEL`; for cloud also `HUNTER_AI_ALLOW_REMOTE=1`.
-- **No quarantine file from `--ai-yara`** → `pip install yara-python`, and make sure the run had HIGH/CRITICAL items.
+| File | What |
+|------|------|
+| `results.json` | full machine-readable output (feeds the report) |
+| `_summary_report.md` | human-readable verdict |
+| `_all_yara_rules.yara` | deployable YARA |
+| `_ai_yara_NEEDS_REVIEW.yara` | AI YARA (review first) |
+| `_all_indicators.json` | extracted IoCs |
+| `_stats.json` | session stats |
+| `_attack_navigator.json` | Navigator layer |
+| `_attack_heatmap.svg` | heatmap |
 
 ---
 
-## 9. Two rules to live by
+## Add a primitive (profile = JSON, key `primitives`)
 
-1. **Your prompt must show `(.venv)`.** That single thing prevents most problems.
-2. **Never commit or paste your API key.** Set it in the shell only; rotate it if
-   it ever leaks.
+```json
+"my_signal": { "score": 4, "keywords": ["phrase one", "phrase two"] }
+```
 
-That's it — you're running. For the deep dive, open `OPERATIONAL_MANUAL.md`.
+Map it to a technique (key `attack_map`) — all `when` signals must be present:
+
+```json
+{ "id": "T1566", "when": ["my_signal", "authority"] }
+```
+
+Verify a technique ID is current before using it:
+```bash
+python3 -c "import json;c=json.load(open('mitre_cache.json'));print('T1566' in {m['id'] for m in c['metadata']})"
+```
+`False` = wrong/renumbered ID; look it up on attack.mitre.org.
+
+Tune levels in profile `config.risk_thresholds` (LOW/MEDIUM/HIGH; above HIGH = CRITICAL).
+
+---
+
+## Common fixes
+
+| Problem | Fix |
+|---------|-----|
+| `externally-managed-environment` | activate venv first |
+| `ModuleNotFoundError` | venv not active — `source .venv/bin/activate` |
+| AI-YARA "requires yara-python" | `pip install yara-python` |
+| AI does nothing | set `HUNTER_AI_PROVIDER` + `HUNTER_AI_MODEL` + `HUNTER_AI_ALLOW_REMOTE=1` |
+| `attack_map references '<ID>', not present` | fix the ID (renumbered) — fail-closed working |
+| no correlation chart | need ≥20 cases; run `--all` |
+
+---
+
+## Security reminders
+
+- **Never commit or paste API keys.** Export them; rotate if exposed.
+- **Cloud AI = data leaves the box.** Use local or `--no-ai` for sensitive data.
+- **Review AI-YARA before deploying.**
+- Reports/STIX contain **no message text**; IoCs included unless `--defang`.
