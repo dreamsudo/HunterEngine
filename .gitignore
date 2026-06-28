@@ -1,0 +1,61 @@
+# ============================================================
+#  HunterEngine .gitignore   (repo root = HunterEngine/)
+# ============================================================
+
+# ---- SECRETS: never commit ----
+.env
+.env.*
+*.env
+*.key
+*.pem
+*token*
+*secret*
+*secrets*
+credentials*
+*api_key*
+
+# ---- Engine output: regenerable AND contains RAW MESSAGE TEXT ----
+# results.json / _summary_report.md hold the actual analyzed messages.
+# Keep all of this private.
+HunterEngineBox/
+report_aggregate/
+graphs_aggregate/
+**/session_*/
+**/graphs/
+**/report/
+
+# ---- Local ATT&CK data: large, rebuilt automatically on first run ----
+mitre_cache.json
+attack-stix-data/
+
+# ---- Dead / superseded files (should be deleted, ignored as backstop) ----
+generate_graphs.py
+OPERATIONAL_MANUAL.md
+POC.md
+*.bak
+
+# ---- Python ----
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# ---- Editor / OS scratch ----
+*.tmp
+*.swp
+*~
+.DS_Store
+*.log
+
+# ---- Optional: uncomment if test_input.txt holds REAL/sensitive samples ----
+# test_input.txt
+
+# ---- KEEP the README screenshots (override the output-dir ignores above) ----
+!docs/
+!docs/images/
+!docs/images/*.png

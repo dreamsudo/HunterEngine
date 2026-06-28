@@ -1,0 +1,77 @@
+{
+  "config": {
+    "fuzzy_threshold": 85,
+    "risk_thresholds": {
+      "LOW": 4,
+      "MEDIUM": 8,
+      "HIGH": 12
+    },
+    "score_boosts": {
+      "has_indicator": 5,
+      "mitre_ttp": 6
+    }
+  },
+  "attack_map": [
+    {"id": "T1566",     "when": ["action_request", "authority"]},
+    {"id": "T1566.002", "when": ["action_request", "has_indicator"]},
+    {"id": "T1684.001", "when": ["authority"]},
+    {"id": "T1684.001", "when": ["authority_impersonation"]},
+    {"id": "T1598",     "when": ["action_request", "consequence"]},
+    {"id": "T1056.003", "when": ["technical_lure", "action_request"]},
+    {"id": "T1657",     "when": ["bec_financial_lure"]},
+    {"id": "T1534",     "when": ["authority_impersonation", "urgency"]},
+    {"id": "T1567",     "when": ["exfil_channel"]},
+    {"id": "T1567.002", "when": ["exfil_channel", "data_sensitivity"]},
+    {"id": "T1530",     "when": ["data_sensitivity", "suspicious_activity"]}
+  ],
+  "primitives": {
+    "urgency": {
+      "score": 3,
+      "keywords": ["urgent", "immediate", "action required", "expires", "final notice", "now", "today", "overdue", "important notice", "pending notification", "expired", "end of day", "asap", "needs to be done now"]
+    },
+    "authority": {
+      "score": 4,
+      "keywords": ["irs", "fbi", "hr", "it department", "it security", "help desk", "support team", "security alert", "microsoft", "google", "apple", "docusign", "fedex", "paypal", "bank", "admin"]
+    },
+    "authority_impersonation": {
+      "score": 5,
+      "keywords": ["ceo", "cfo", "president", "manager", "director", "are you at your desk", "i need a favor"]
+    },
+    "consequence": {
+      "score": 4,
+      "keywords": ["suspended", "locked", "deleted", "compromised", "violation", "legal complaint", "investigated", "breach", "failed", "closure", "identity theft", "flagged", "strange activity"]
+    },
+    "financial": {
+      "score": 3,
+      "keywords": ["invoice", "payment", "wire transfer", "crypto", "reward", "winner", "prize", "gift card", "bonus", "tax return", "transfer", "remittance", "closing costs"]
+    },
+    "bec_financial_lure": {
+      "score": 6,
+      "keywords": ["wire instructions", "change of bank", "updated invoice", "swift code", "routing number", "bank details", "payment change", "ach payment", "wire transfer", "new vendor", "vendor payment", "new beneficiary"]
+    },
+    "action_request": {
+      "score": 3,
+      "keywords": ["click", "download", "verify", "authenticate", "scan", "login", "update", "reset", "review", "view documents", "sign in", "approve", "confirm", "authorize", "tap here", "enter password", "portal", "unlock", "qr code", "calendar invite"]
+    },
+    "technical_lure": {
+      "score": 3,
+      "keywords": ["malware", "vpn", "reboot", "browser detected", "session activated", "system errors", "critical errors", "quarantined", "encrypted", "voicemail", "remote access", "mfa code"]
+    },
+    "data_sensitivity": {
+      "score": 5,
+      "keywords": ["confidential", "proprietary", "internal use only", "trade secret", "customer list", "customer database", "database", "salary", "ssn", "pii", "classified", "financials"]
+    },
+    "exfil_channel": {
+      "score": 4,
+      "keywords": ["usb drive", "personal email", "cloud storage", "dropbox", "mega.nz", "wetransfer", "google drive", "burn address", "pastebin"]
+    },
+    "suspicious_activity": {
+      "score": 3,
+      "keywords": ["export", "download all", "copying files", "large transfer", "after hours", "off-boarding", "resignation", "upload", "work from home"]
+    },
+    "benign": {
+      "score": 0,
+      "keywords": ["text stop", "unsubscribe", "press 1", "view statement", "team drive", "shared folder", "standard report"]
+    }
+  }
+}

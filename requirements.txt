@@ -1,0 +1,8 @@
+requests>=2.31
+tqdm>=4.66
+rapidfuzz>=3.6
+stix2>=3.0
+
+# Optional — only needed for the --ai-yara feature (the mandatory compile gate).
+# Install separately: pip install yara-python
+# yara-python>=4.5

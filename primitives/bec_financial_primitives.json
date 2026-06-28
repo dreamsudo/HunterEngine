@@ -1,0 +1,42 @@
+{
+  "config": {
+    "fuzzy_threshold": 85,
+    "risk_thresholds": {
+      "LOW": 4,
+      "MEDIUM": 7,
+      "HIGH": 10
+    },
+    "score_boosts": {
+      "has_indicator": 4,
+      "mitre_ttp": 4
+    }
+  },
+  "attack_map": [
+    {"id": "T1684.001", "when": ["authority_impersonation"]},
+    {"id": "T1657", "when": ["bec_financial_lure"]},
+    {"id": "T1566", "when": ["authority_impersonation", "financial"]},
+    {"id": "T1534", "when": ["authority_impersonation", "urgency"]}
+  ],
+  "primitives": {
+    "bec_financial_lure": {
+      "score": 6,
+      "keywords": ["wire instructions", "change of bank", "updated invoice", "swift code", "routing number", "bank details", "payment change", "ach payment"]
+    },
+    "urgency": {
+      "score": 4,
+      "keywords": ["urgent", "immediate", "today", "end of day", "asap", "needs to be done now"]
+    },
+    "authority_impersonation": {
+      "score": 5,
+      "keywords": ["ceo", "cfo", "president", "manager", "director", "are you at your desk", "i need a favor"]
+    },
+    "financial": {
+      "score": 3,
+      "keywords": ["invoice", "payment", "wire transfer", "transfer", "remittance", "closing costs"]
+    },
+    "benign": {
+      "score": 0,
+      "keywords": ["unsubscribe", "view statement"]
+    }
+  }
+}

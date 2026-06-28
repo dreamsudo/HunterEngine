@@ -1,0 +1,38 @@
+{
+  "config": {
+    "fuzzy_threshold": 80,
+    "risk_thresholds": {
+      "LOW": 3,
+      "MEDIUM": 6,
+      "HIGH": 9
+    },
+    "score_boosts": {
+      "has_indicator": 5,
+      "mitre_ttp": 5
+    }
+  },
+  "attack_map": [
+    {"id": "T1567", "when": ["exfil_channel"]},
+    {"id": "T1567.002", "when": ["exfil_channel", "data_sensitivity"]},
+    {"id": "T1530", "when": ["data_sensitivity", "suspicious_activity"]},
+    {"id": "T1052", "when": ["exfil_channel", "suspicious_activity"]}
+  ],
+  "primitives": {
+    "data_sensitivity": {
+      "score": 5,
+      "keywords": ["confidential", "proprietary", "internal use only", "trade secret", "customer list", "salary", "ssn", "pii", "classified"]
+    },
+    "exfil_channel": {
+      "score": 4,
+      "keywords": ["usb drive", "personal email", "cloud storage", "dropbox", "mega.nz", "wetransfer", "google drive", "burn address", "pastebin"]
+    },
+    "suspicious_activity": {
+      "score": 3,
+      "keywords": ["export", "download all", "copying files", "large transfer", "after hours", "off-boarding", "resignation"]
+    },
+    "benign": {
+      "score": 0,
+      "keywords": ["team drive", "shared folder", "standard report"]
+    }
+  }
+}
