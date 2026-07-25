@@ -24,7 +24,7 @@ STIX 2.1 / TAXII-ready export.**
 13. [Visualization: Navigator Layer & Heatmap](#13-visualization)
 14. [Reporting: `generate_report.py`](#14-reporting-generate_reportpy)
 15. [STIX 2.1 / TAXII Export](#15-stix-21--taxii-export)
-16. [The Pipeline Test Harness](#16-the-pipeline-test-harness)
+16. [Testing (Unit Suite & Pipeline Harness)](#16-testing)
 17. [Writing & Extending Primitive Profiles](#17-writing--extending-primitive-profiles)
 18. [Environment Variable Reference](#18-environment-variable-reference)
 19. [Security Considerations](#19-security-considerations)
@@ -54,6 +54,14 @@ many sessions into clean charts, a plain-language executive summary, and a
 
 It is built for **defensive** use: triage queues, phishing-report inboxes,
 SOC enrichment, threat-intel production, and detection engineering.
+
+### System architecture at a glance
+
+![HunterEngine system architecture](docs/images/arch_overview.svg)
+
+Sources on the left, the deterministic core in the middle, session artifacts and
+reporting on the right — and the AI layer underneath, optional and advisory,
+running only after the verdict is final.
 
 ---
 
@@ -86,7 +94,7 @@ and tactics come from the real dataset, not from anywhere else.
 
 ### Requirements
 
-- Python 3.10+ (tested on 3.13)
+- Python 3.10+ (CI-tested on 3.10 and 3.12)
 - The Python packages in `requirements.txt`:
   `requests`, `tqdm`, `rapidfuzz`, `stix2`
 - Optional, feature-gated:
@@ -104,19 +112,25 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# optional features:
-pip install yara-python          # for AI-YARA drafting
-pip install matplotlib numpy     # for the reporting tool
+# optional features + test tooling (yara-python, matplotlib/numpy, pytest):
+pip install -r requirements-dev.txt
 ```
+
+Runtime dependencies are **pinned** in `requirements.txt` to the versions the
+release was tested against; bump them deliberately and re-run the test suite.
 
 Re-activate the environment (`source .venv/bin/activate`) in every new shell
 before running the engine.
 
 ### First run downloads ATT&CK
 
-On first use the engine builds `mitre_cache.json` from the ATT&CK dataset
-(~900+ enterprise techniques). This happens once and is then reused. If the
-cache becomes stale or corrupt, delete it and it will rebuild:
+On first use the engine builds `mitre_cache.json` from the ATT&CK dataset —
+918 techniques across the enterprise, mobile, and ICS domains, **plus the
+tactic table** (shortname, display name, TA-ID, kill-chain order) that the
+reporting tool reads so tactic charts never go stale when ATT&CK renames a
+tactic. This happens once and is then reused. If the cache becomes stale or
+corrupt, delete it and it will rebuild (a cache from an older version that
+lacks the tactic table is detected and rebuilt automatically):
 
 ```bash
 rm mitre_cache.json
@@ -154,8 +168,15 @@ That is the whole loop: analyze → inspect → report.
 | **Profile** | A JSON file bundling primitives, engine config, and ATT&CK combo-rules. Selected with `-c`. |
 | **Signal** | A primitive that fired on a given input, plus derived signals like `has_indicator`. Signals drive ATT&CK mapping. |
 | **Combo-rule** | An entry in `attack_map` that fires a technique only when **all** listed signals are present. |
-| **Session** | One run. Each run writes a timestamped folder under `HunterEngineBox/`. |
+| **Session** | One run. Each run writes a timestamped folder under `HunterEngineBox/` (runs that start in the same second get a `_02`, `_03`… suffix — sessions never merge). |
 | **Advisory** | The optional AI note attached to HIGH/CRITICAL items. Never affects scoring. |
+
+### The enrichment pipeline
+
+Every item passes through the same stages, and every score component is visible
+in the output — this diagram traces a real lure end to end:
+
+![Per-item enrichment pipeline](docs/images/arch_pipeline.svg)
 
 ---
 
@@ -207,7 +228,13 @@ Keep items reasonably short (the AI layer truncates very long items per
 
 ## 8. Output Artifacts
 
-Every run creates `HunterEngineBox/session_<timestamp>/` containing:
+Every run creates `HunterEngineBox/session_<timestamp>/` (owner-only, mode
+`700`; same-second runs get a `_02` suffix rather than sharing a folder).
+Each artifact has a specific audience:
+
+![Session artifacts and their consumers](docs/images/arch_outputs.svg)
+
+The folder contains:
 
 | File | Contents |
 |------|----------|
@@ -232,7 +259,7 @@ Each element of the list looks like:
     "risk_level": "CRITICAL",
     "tags": ["authority_impersonation", "bec_financial_lure", "..."]
   },
-  "indicators": { "urls": ["http://..."], "domains": [], "ips": [], "emails": [] },
+  "indicators": { "urls": ["http://..."], "domains": [], "ipv4": [], "emails": [] },
   "mitre_matches": [
     { "id": "T1657", "name": "Financial Theft", "tactic": "impact",
       "via": ["bec_financial_lure"] }
@@ -299,6 +326,19 @@ that input. `when` entries may be:
 Each mapped technique records `via` — the signals that triggered it — which the
 report surfaces so an analyst can see the reasoning.
 
+```mermaid
+flowchart LR
+    A["Input text"] --> B["Primitives fire<br/>urgency, authority, ..."]
+    A --> C["IoC extracted?"]
+    B --> D["Signal set"]
+    C -- yes --> D
+    D --> E{"attack_map rule:<br/>ALL when-signals present?"}
+    E -- no --> F["Technique not mapped"]
+    E -- yes --> G{"ID exists in<br/>mitre_cache.json?"}
+    G -- "no (fail-closed)" --> H["Log warning + skip<br/>never guessed"]
+    G -- yes --> I["Emit technique<br/>name + tactic from dataset<br/>via records the evidence"]
+```
+
 ### Validation (fail-closed)
 
 Before a technique is emitted, its ID is checked against `mitre_cache.json`. If
@@ -324,6 +364,34 @@ broad coverage.
 When enabled, the AI layer attaches a short note to **HIGH and CRITICAL** items:
 a one-line summary, analyst notes, and concrete action items.
 
+### Trust model
+
+The AI layer assumes hostility on both sides — the attacker text it reads *and*
+the model output it gets back. Every path in and out passes a gate:
+
+![AI layer trust boundaries](docs/images/arch_ai_trust.svg)
+
+```mermaid
+sequenceDiagram
+    participant E as Engine (verdict final)
+    participant G as Egress guard
+    participant P as Provider (cloud or local)
+    participant V as Validator
+    E->>G: HIGH/CRITICAL item (hardened prompt, defanged IoCs)
+    alt endpoint not loopback and ALLOW_REMOTE != 1
+        G-->>E: refused - AI disabled, run continues
+    else permitted
+        G->>P: request (budgeted, timed out)
+        P-->>V: raw reply (UNTRUSTED)
+        V->>V: strict JSON extract, collapse whitespace, cap lengths
+        alt reply invalid
+            V-->>E: item skipped (fail-open)
+        else valid
+            V-->>E: ai_advisory attached - labeled advisory-only
+        end
+    end
+```
+
 ### Enabling it
 
 The layer is **off** unless configured. To enable a **cloud** provider:
@@ -342,6 +410,10 @@ export HUNTER_AI_PROVIDER=openai-compatible
 export HUNTER_AI_BASE_URL=http://localhost:11434/v1   # e.g. Ollama
 export HUNTER_AI_MODEL=llama3.1
 ```
+
+> "Local" means **loopback only**: `localhost`, `127.x.x.x`, `::1`. Anything
+> else — including `.local` mDNS names, which resolve to *other* machines on
+> your LAN — counts as remote and requires `HUNTER_AI_ALLOW_REMOTE=1`.
 
 `--no-ai` overrides all of the above and forces a pure deterministic run.
 
@@ -377,6 +449,20 @@ rule. This is the one place the AI does something the keyword generator
 structurally cannot: it selects **contextual phrases** ("this is the CEO",
 "urgent wire transfer") rather than isolated keywords, which tends to mean fewer
 false positives.
+
+```mermaid
+flowchart LR
+    A["HIGH / CRITICAL item"] --> B["Model proposes<br/>string literals + count<br/>NEVER rule syntax"]
+    B --> C["Validate + dedupe<br/>length caps"]
+    C --> D["Deterministic scaffold<br/>quotes and backslashes escaped"]
+    D --> E{"yara-python<br/>compiles it?"}
+    E -- no --> F["DISCARDED"]
+    E -- yes --> G["_ai_yara_NEEDS_REVIEW.yara<br/>quarantine - human review required"]
+    G -. "never merged" .-> H["_all_yara_rules.yara<br/>deployable ruleset"]
+```
+
+Duplicate inputs draft once (one provider call, one rule); the quarantine file
+is deduplicated by rule name so it always compiles as a whole.
 
 ### Mandatory compile gate
 
@@ -415,7 +501,9 @@ A MITRE ATT&CK Navigator layer (v4.5 schema). To view the interactive matrix:
 3. Select `_attack_navigator.json`
 
 Each technique's score is the number of inputs that mapped to it; the gradient
-shades by frequency.
+shades by frequency. The layer deliberately does **not** pin an ATT&CK release
+version — Navigator renders it against its current dataset, matching the
+engine's own always-current local cache.
 
 ### Heatmap — `_attack_heatmap.svg`
 
@@ -441,6 +529,12 @@ or many sessions into a professional, shareable report.
 - **MITRE nomenclature only.** Techniques are shown by official ID + name
   (`T1566 Phishing`); tactics by display name + TA-ID (`Initial Access
   (TA0001)`) in canonical kill-chain order. Nothing is invented or renamed.
+  The tactic table is **read from `mitre_cache.json`** (written by the engine
+  straight from the dataset's matrix objects), so when ATT&CK renames or adds a
+  tactic — e.g. Defense Evasion → Stealth (TA0005), or the new Defense
+  Impairment (TA0112) — charts pick it up automatically instead of silently
+  dropping those detections. A static fallback table covers runs without a
+  cache.
 - **Honest measurement.** Counts are **detection frequency** (number of cases
   mapping to a technique/tactic), explicitly **not** vulnerability/CVE counts —
   HunterEngine maps adversary *behaviour*. The correlation matrix is **skipped**
@@ -514,9 +608,46 @@ content, so by default it appears in the STIX `pattern` (that is the point of
 shareable intel — "block this domain"). Use `--defang` to neutralize those
 values in the pattern (`hxxp://`, `[.]`) if your downstream workflow requires it.
 
+IoC values are **escaped per the STIX pattern grammar** before insertion
+(`\` and `'`): attacker-controlled URLs are hostile data, and without escaping,
+a crafted URL could inject arbitrary pattern content into intel you share. The
+test suite locks this in.
+
 ---
 
-## 16. The Pipeline Test Harness
+## 16. Testing
+
+Three layers, each catching what the others can't:
+
+```mermaid
+flowchart TD
+    A["tests/ - 62 offline unit tests<br/>fixtures for MITRE data, stubbed AI providers<br/>encodes security + regression invariants"]
+    B["run_pipeline_test.sh - end-to-end harness<br/>4 real engine runs: offline / AI-YARA / cloud / local"]
+    C["CI - .github/workflows/ci.yml<br/>pyflakes + pytest on Python 3.10 and 3.12, every push"]
+    A --> C
+    A -- "fast, every change" --> D[Ship]
+    B -- "full install validation" --> D
+    C -- "gate on GitHub" --> D
+```
+
+### Unit / regression suite (`tests/`)
+
+A fully offline pytest suite — no network, no API keys, MITRE data injected as
+fixtures, AI providers stubbed in-process. It encodes the project's security
+invariants: fail-closed ATT&CK mapping, YARA/STIX/markdown injection
+resistance, the AI egress guard, output dedup, and the mandatory AI-YARA
+compile gate. CI (`.github/workflows/ci.yml`) runs it with `pyflakes` on every
+push.
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Run it before shipping any change; the end-to-end harness below complements it
+but does not replace it.
+
+### The Pipeline Test Harness
 
 `run_pipeline_test.sh` exercises the whole engine in every mode and then opens
 all artifacts, so you can validate an install end to end in one command.
@@ -687,6 +818,18 @@ CLI flags: `-c/--config`, `--no-banner`, `--no-ai`, `--ai-yara`.
 - **Reports are shareable by design.** No message content is included in charts,
   the summary, or the STIX bundle; cases are anonymized. IoCs (which are meant to
   be shared) appear in the STIX pattern unless `--defang` is used.
+- **Injection hardening, everywhere attacker text lands.** YARA string values
+  are escaped so hostile input cannot break out of a rule; STIX pattern values
+  are escaped per the pattern grammar; the markdown report neutralizes control
+  characters and backticks in input previews; AI output is whitespace-collapsed
+  and length-capped so a manipulated model cannot forge report structure. All of
+  this is locked in by the test suite.
+- **File permissions.** Session folders are mode `700`. The working logs that
+  can hold raw message text (`missed_inputs.log`, `failed_inputs.log`) are
+  created mode `600`.
+- **Egress guard is loopback-only.** Only `localhost`/`127.x`/`::1` endpoints
+  are treated as local; `.local` mDNS names count as remote (they resolve to
+  other machines) and require the explicit opt-in.
 - **Defensive scope.** HunterEngine classifies and enriches suspicious text for
   defense. It does not generate lures or offensive content.
 
@@ -702,6 +845,7 @@ CLI flags: `-c/--config`, `--no-banner`, `--no-ai`, `--ai-yara`.
 | AI-YARA or cloud advisory silently does nothing | Provider not fully configured. Set `HUNTER_AI_PROVIDER`, `HUNTER_AI_MODEL`, and `HUNTER_AI_ALLOW_REMOTE=1` (cloud) or a local `HUNTER_AI_BASE_URL`. |
 | `attack_map references '<ID>', not present` in logs | The technique ID is unknown/renumbered. Find the current ID on attack.mitre.org and fix the profile. (This is fail-closed working.) |
 | Only 2 techniques / weird cache | Stale cache. `rm mitre_cache.json` to force a rebuild. |
+| Log says "cache unreadable or stale … rebuilding" after upgrading | Expected once: older caches lack the tactic table and rebuild automatically. |
 | Correlation chart missing from a report | Fewer than 20 cases — it is skipped on purpose. Run `--all` across more sessions. |
 | `generate_report.py` "Missing dependency" | `pip install matplotlib numpy`. |
 | STIX line doesn't say `stix2-validated` | The `stix2` library isn't importable in this environment; a spec-compliant fallback bundle was written instead. Install `stix2` to validate. |
@@ -718,9 +862,13 @@ CLI flags: `-c/--config`, `--no-banner`, `--no-ai`, `--ai-yara`.
 | `attack_viz.py` | Emits the Navigator layer and the heatmap SVG. |
 | `generate_report.py` | Standalone reporting: charts, executive summary, STIX 2.1 export. Reads sessions only. |
 | `run_pipeline_test.sh` | 4-mode end-to-end test harness + artifact opener. |
+| `tests/` | Offline pytest suite encoding the security/regression invariants. |
 | `primitives/*.json` | Primitive profiles (default phishing, BEC, insider exfil, merged). |
-| `mitre_cache.json` | Local cached ATT&CK dataset used for fail-closed validation, names, and tactics. |
-| `requirements.txt` | Python dependencies. |
+| `mitre_cache.json` | Local cached ATT&CK dataset (techniques + tactic table) used for fail-closed validation, names, and tactics. |
+| `requirements.txt` | Pinned runtime dependencies. |
+| `requirements-dev.txt` | Test tooling + optional features (yara-python, matplotlib/numpy). |
+| `.github/workflows/ci.yml` | CI: pyflakes + pytest on every push. |
+| `docs/images/` | README/MANUAL visuals: architecture SVGs + sample report charts (real, anonymized output). |
 | `HunterEngineBox/` | Output: one timestamped session folder per run. |
 
 ---

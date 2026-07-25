@@ -18,7 +18,9 @@ that never changes a verdict.
   identical.
 - **Fail-closed ATT&CK.** Every technique ID is validated against a local copy of
   the real ATT&CK dataset. Unknown or renumbered IDs are logged and skipped, never
-  guessed. Names and tactics come from the dataset, not model memory.
+  guessed. Names, tactics — and the tactic table itself — come from the dataset,
+  not model memory, so ATT&CK renames (e.g. Defense Evasion → Stealth, TA0005)
+  flow through automatically.
 - **Standards-aligned output.** MITRE ATT&CK Navigator layers, and STIX 2.1
   bundles that drop into MISP, OpenCTI, ATT&CK Workbench, and SIEMs.
 - **Safe to share.** Reports and STIX exports contain **no message content** —
@@ -26,10 +28,32 @@ that never changes a verdict.
 
 ---
 
+## Architecture
+
+Text goes in on the left; everything trustworthy happens in the deterministic
+core; the AI layer sits below it, optional and advisory, and can never touch a
+verdict.
+
+![HunterEngine system architecture](docs/images/arch_overview.svg)
+
+Per item, enrichment is a straight pipeline — every score component is visible
+and reproducible:
+
+![Per-item enrichment pipeline with score composition](docs/images/arch_pipeline.svg)
+
+The AI layer treats both sides as hostile: the input it reads *and* the output
+it returns. Gates on the way in (prompt hardening, loopback-only egress unless
+explicitly allowed) and on the way out (strict validation, sanitization, a
+mandatory YARA compile gate with quarantine):
+
+![AI layer trust boundaries](docs/images/arch_ai_trust.svg)
+
+---
+
 ## What it produces
 
 The reporting tool (`generate_report.py`) turns one or many analysis sessions into
-a clean, MITRE-standardized report. Every chart below is real output from a 48-case
+a clean, MITRE-standardized report. Every chart below is real output from a 72-case
 aggregate run — **no message content appears anywhere; cases are anonymized.**
 
 ### ATT&CK techniques by detection frequency
@@ -58,8 +82,8 @@ on a varied corpus this becomes a multi-color stacked breakdown.)
 
 Per-case behaviour at a glance — each row is an **anonymized** case (`CASE-001`…),
 each column an ATT&CK tactic. The raw message text never appears; you read the
-*shape* of each case's activity. Phishing cases cluster in Reconnaissance / Initial
-Access; exfiltration cases cluster in Collection / Exfiltration.
+*shape* of each case's activity. Phishing cases cluster in Reconnaissance /
+Initial Access / Stealth; exfiltration cases cluster in Collection / Exfiltration.
 
 ![Anonymized case-by-tactic heatmap](docs/images/04_case_tactic_heatmap.png)
 
@@ -81,6 +105,11 @@ A quick severity overview for non-technical readers.
 > Alongside these charts the report also writes `EXECUTIVE_SUMMARY.txt`
 > (plain-language brief) and `findings_stix_bundle.json` (STIX 2.1, validated
 > through the `stix2` library).
+
+Every session artifact has a specific audience — analysts, detection engineers,
+intel platforms, stakeholders:
+
+![Session artifacts and their consumers](docs/images/arch_outputs.svg)
 
 ---
 
@@ -161,13 +190,32 @@ yara_ai.py               # AI-assisted YARA drafting (compile-gated, quarantined
 attack_viz.py            # Navigator layer + heatmap
 generate_report.py       # standalone reporting: charts + summary + STIX 2.1
 run_pipeline_test.sh     # 4-mode end-to-end test harness
+tests/                   # offline pytest suite (unit + regression; no network)
 primitives/              # primitive profiles (default phishing, BEC, insider, merged)
-mitre_cache.json         # local ATT&CK dataset (built on first run)
-requirements.txt
+mitre_cache.json         # local ATT&CK dataset + tactic table (built on first run)
+requirements.txt         # pinned runtime dependencies
+requirements-dev.txt     # test tooling + optional features (yara, charts)
+.github/workflows/ci.yml # lint + test on every push
 MANUAL.md                # comprehensive operator & developer manual
 POCKET_MANUAL.md         # short operator quick reference
-docs/images/             # screenshots used in this README
+docs/images/             # architecture diagrams (SVG) + report chart samples
 ```
+
+---
+
+## Testing
+
+Two layers, run both before shipping changes:
+
+```bash
+pip install -r requirements-dev.txt
+pytest                     # offline unit/regression suite (fast, no network)
+./run_pipeline_test.sh     # 4-mode end-to-end harness (real engine runs)
+```
+
+The unit suite encodes the security invariants — fail-closed ATT&CK mapping,
+YARA/STIX/markdown injection resistance, the AI egress guard, compile-gated
+AI rules — so regressions fail loudly in CI rather than silently in the field.
 
 ---
 

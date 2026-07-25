@@ -2,6 +2,13 @@
 
 Quick operator reference. For full detail see **MANUAL.md**.
 
+```mermaid
+flowchart LR
+    A["input.txt"] --> B["HunterEngine.py<br/>deterministic verdict"]
+    B --> C["HunterEngineBox/session_x/<br/>report + YARA + IoCs + ATT&CK"]
+    C --> D["generate_report.py --all<br/>charts + summary + STIX 2.1"]
+```
+
 ---
 
 ## Setup (once per shell)
@@ -43,7 +50,7 @@ export HUNTER_AI_API_KEY=<key>
 python3 HunterEngine.py INPUT.txt -c primitives/merged_primitives.json
 ```
 
-**Local** (nothing leaves the box):
+**Local** (nothing leaves the box — loopback only; `.local` names count as remote):
 ```bash
 export HUNTER_AI_PROVIDER=openai-compatible
 export HUNTER_AI_BASE_URL=http://localhost:11434/v1
@@ -87,14 +94,12 @@ Correlation chart only appears at **≥20 cases** (by design).
 
 ---
 
-## Test the whole pipeline
+## Test
 
 ```bash
-./run_pipeline_test.sh
+pytest                     # 62 offline unit/regression tests (fast)
+./run_pipeline_test.sh     # end-to-end: all 4 modes, skips missing prereqs
 ```
-
-Runs all 4 modes (offline / AI-YARA / cloud / local), skips any whose prereqs
-are missing, opens all artifacts.
 
 ---
 

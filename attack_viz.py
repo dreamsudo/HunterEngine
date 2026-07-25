@@ -55,8 +55,10 @@ def build_navigator_layer(results: List[Dict[str, Any]], session_id: str,
 
     return {
         "name": f"{name} {session_id}",
+        # No "attack" version claimed: the layer is built from whatever ATT&CK
+        # dataset is cached locally; Navigator renders against its current data
+        # rather than being pinned to a stale hardcoded release.
         "versions": {
-            "attack": "14",
             "navigator": NAVIGATOR_VERSION,
             "layer": LAYER_VERSION,
         },
@@ -124,8 +126,8 @@ def build_heatmap_svg(results: List[Dict[str, Any]], session_id: str) -> str:
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" '
         f'height="{height}" font-family="Segoe UI, Helvetica, Arial, sans-serif">',
         f'<rect width="{width}" height="{height}" fill="#ffffff"/>',
-        f'<text x="20" y="32" font-size="20" font-weight="700" fill="#1a1a1a">'
-        f'ATT&amp;CK Technique Heatmap</text>',
+        '<text x="20" y="32" font-size="20" font-weight="700" fill="#1a1a1a">'
+        'ATT&amp;CK Technique Heatmap</text>',
         f'<text x="20" y="52" font-size="12" fill="#666">Session {html.escape(session_id)} '
         f'— {len(results)} input(s), {len(items)} technique(s)</text>',
     ]

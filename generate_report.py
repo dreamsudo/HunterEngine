@@ -48,7 +48,6 @@ try:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.colors import LinearSegmentedColormap
-    from matplotlib.patches import Patch
 except ImportError:
     sys.exit("Missing dependency. Run: pip install matplotlib numpy")
 
@@ -60,9 +59,13 @@ try:
 except Exception:
     _HAVE_STIX2 = False
 
-# ---- MITRE ATT&CK Enterprise tactics: official shortname -> (display, TA-id) ----
-# Canonical kill-chain order. Source: MITRE ATT&CK Enterprise matrix.
-TACTICS = [
+# ---- MITRE ATT&CK tactics: official shortname -> (display, TA-id) ----
+# The authoritative table is read from mitre_cache.json (written by the engine
+# straight from the dataset's matrix objects, in canonical kill-chain order), so
+# reporting never silently drops a tactic that ATT&CK has renamed or added.
+# The static list below is only a fallback for running without a cache.
+MITRE_CACHE_FILE = "mitre_cache.json"
+FALLBACK_TACTICS = [
     ("reconnaissance",        "Reconnaissance",        "TA0043"),
     ("resource-development",  "Resource Development",  "TA0042"),
     ("initial-access",        "Initial Access",        "TA0001"),
@@ -70,6 +73,8 @@ TACTICS = [
     ("persistence",           "Persistence",           "TA0003"),
     ("privilege-escalation",  "Privilege Escalation",  "TA0004"),
     ("defense-evasion",       "Defense Evasion",       "TA0005"),
+    ("stealth",               "Stealth",               "TA0005"),
+    ("defense-impairment",    "Defense Impairment",    "TA0112"),
     ("credential-access",     "Credential Access",     "TA0006"),
     ("discovery",             "Discovery",             "TA0007"),
     ("lateral-movement",      "Lateral Movement",      "TA0008"),
@@ -78,6 +83,23 @@ TACTICS = [
     ("exfiltration",          "Exfiltration",          "TA0010"),
     ("impact",                "Impact",                "TA0040"),
 ]
+
+
+def _load_tactics():
+    """Tactic table from the engine's ATT&CK cache; static fallback otherwise."""
+    try:
+        with open(MITRE_CACHE_FILE, encoding="utf-8") as f:
+            cached = json.load(f).get("tactics") or []
+        tactics = [(t["shortname"], t["name"], t["taid"]) for t in cached
+                   if t.get("shortname") and t.get("name") and t.get("taid")]
+        if tactics:
+            return tactics
+    except Exception:
+        pass
+    return FALLBACK_TACTICS
+
+
+TACTICS = _load_tactics()
 TACTIC_DISPLAY = {s: d for s, d, _ in TACTICS}
 TACTIC_TAID = {s: t for s, _, t in TACTICS}
 TACTIC_RANK = {s: i for i, (s, _, _) in enumerate(TACTICS)}
@@ -354,7 +376,7 @@ def write_exec_summary(items, out, session_dirs):
     L = []
     L.append("=" * 70)
     L.append("  THREAT ENRICHMENT — EXECUTIVE SUMMARY")
-    L.append("  Framework: MITRE ATT&CK (Enterprise)")
+    L.append("  Framework: MITRE ATT&CK")
     L.append(f"  Generated: {now}")
     L.append(f"  Sessions analyzed: {len(session_dirs)}")
     L.append("=" * 70)
@@ -420,19 +442,27 @@ def _attack_url(tid: str) -> str:
     return ATTACK_URL + tid.replace(".", "/")
 
 
+def _stix_escape(value: str) -> str:
+    """Escape a value for a single-quoted STIX pattern string literal. IoC
+    values are attacker-controlled (extracted from hostile messages); without
+    this, a quote in a URL breaks out of the literal and injects arbitrary
+    pattern content into intel shared with MISP/OpenCTI/SIEMs."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
 def _stix_pattern_for(indicators: Dict[str, List[str]], defang: bool) -> str:
     """Build a STIX pattern from extracted IoCs (urls / domains / ips / emails)."""
     parts = []
     for url in indicators.get("urls", []):
         v = _defang(url) if defang else url
-        parts.append(f"[url:value = '{v}']")
+        parts.append(f"[url:value = '{_stix_escape(v)}']")
     for dom in indicators.get("domains", []):
         v = _defang(dom) if defang else dom
-        parts.append(f"[domain-name:value = '{v}']")
-    for ip in indicators.get("ips", []):
-        parts.append(f"[ipv4-addr:value = '{ip}']")
+        parts.append(f"[domain-name:value = '{_stix_escape(v)}']")
+    for ip in indicators.get("ipv4", []):
+        parts.append(f"[ipv4-addr:value = '{_stix_escape(ip)}']")
     for em in indicators.get("emails", []):
-        parts.append(f"[email-addr:value = '{em}']")
+        parts.append(f"[email-addr:value = '{_stix_escape(em)}']")
     return " OR ".join(parts)
 
 

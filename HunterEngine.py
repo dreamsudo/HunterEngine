@@ -323,9 +323,13 @@ class ThreatEnrichmentEngine:
             try:
                 with open(MITRE_CACHE_FILE, "r", encoding="utf-8") as f:
                     cache = json.load(f)
+                # 'tactics' was added later; a cache without it predates the
+                # data-driven tactic table and must be rebuilt.
+                if "tactics" not in cache:
+                    raise KeyError("tactics")
                 return cache["keywords"], cache["metadata"]
             except (json.JSONDecodeError, KeyError, OSError) as e:
-                logging.warning("MITRE cache unreadable (%s); rebuilding.", e)
+                logging.warning("MITRE cache unreadable or stale (%s); rebuilding.", e)
 
         logging.info("Building MITRE cache from STIX data...")
         store = MemoryStore()
@@ -373,11 +377,54 @@ class ThreatEnrichmentEngine:
                                     for p in obj.get("kill_chain_phases", [])), "unknown"),
                 })
 
+        # Tactic table (shortname, display name, TA-ID) in canonical kill-chain
+        # order, straight from the dataset's matrix objects. Cached so reporting
+        # never relies on a hardcoded tactic list that goes stale when ATT&CK
+        # renames or adds tactics.
+        mitre_tactics = self._extract_tactics(store)
+
         with open(MITRE_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"keywords": mitre_keywords, "metadata": mitre_metadata}, f, indent=2)
-        logging.info("Saved %d MITRE techniques to cache: %s",
-                     len(mitre_keywords), MITRE_CACHE_FILE)
+            json.dump({"keywords": mitre_keywords, "metadata": mitre_metadata,
+                       "tactics": mitre_tactics}, f, indent=2)
+        logging.info("Saved %d MITRE techniques and %d tactics to cache: %s",
+                     len(mitre_keywords), len(mitre_tactics), MITRE_CACHE_FILE)
         return mitre_keywords, mitre_metadata
+
+    @staticmethod
+    def _extract_tactics(store: "MemoryStore") -> List[Dict[str, str]]:
+        """Ordered tactic table from x-mitre-matrix / x-mitre-tactic objects.
+        Enterprise order first, then mobile, then ICS; deduped by shortname."""
+        tactic_by_ref: Dict[str, Dict[str, str]] = {}
+        for obj in store.query([Filter("type", "=", "x-mitre-tactic")]):
+            taid = next(
+                (ref.get("external_id") for ref in obj.get("external_references", [])
+                 if ref.get("source_name", "").startswith("mitre-")), None)
+            short = obj.get("x_mitre_shortname")
+            if short and taid:
+                tactic_by_ref[obj["id"]] = {
+                    "shortname": short,
+                    "name": obj.get("name", short),
+                    "taid": taid,
+                }
+
+        domain_rank = {"enterprise-attack": 0, "mobile-attack": 1, "ics-attack": 2}
+
+        def matrix_rank(matrix) -> int:
+            eid = next(
+                (ref.get("external_id") for ref in matrix.get("external_references", [])
+                 if ref.get("source_name", "").startswith("mitre-")), "")
+            return domain_rank.get(eid, 99)
+
+        tactics: List[Dict[str, str]] = []
+        seen: set = set()
+        for matrix in sorted(store.query([Filter("type", "=", "x-mitre-matrix")]),
+                             key=matrix_rank):
+            for ref in matrix.get("tactic_refs", []):
+                tactic = tactic_by_ref.get(ref)
+                if tactic and tactic["shortname"] not in seen:
+                    seen.add(tactic["shortname"])
+                    tactics.append(tactic)
+        return tactics
 
     def _extract_indicators(self, text: str) -> Dict[str, List[str]]:
         ipv4_pattern = (r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}'
@@ -610,8 +657,7 @@ rule {rule_name}
                     tags.add(m["tactic"])
 
         if not tags:
-            with open(MISS_LOG, "a", encoding="utf-8") as f:
-                f.write(text + "\n")
+            _append_private(MISS_LOG, text + "\n")
 
         result = {
             "input": text,
@@ -640,9 +686,17 @@ rule {rule_name}
                 logging.error("Failed to process an input (len=%d); written to %s.",
                               len(text) if isinstance(text, str) else -1, ERROR_LOG)
                 logging.debug("Processing error detail", exc_info=True)
-                with open(ERROR_LOG, "a", encoding="utf-8") as f:
-                    f.write(f"{text}\n")
+                _append_private(ERROR_LOG, f"{text}\n")
         return results
+
+
+def _append_private(path: str, text: str):
+    """Append to a log that can hold raw (possibly PII-laden) message text,
+    creating it owner-read/write only. Findings dirs are chmod 700; these logs
+    deserve the same treatment. Mode is a no-op on Windows."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
+        f.write(text)
 
 
 def load_inputs(path: str) -> Generator[str, None, None]:
@@ -673,14 +727,39 @@ def load_inputs(path: str) -> Generator[str, None, None]:
         sys.exit(1)
 
 
+def _dedupe_yara_rules(rules: Iterable[str]) -> List[str]:
+    """Keep the first rule per identifier. YARA refuses to compile a file
+    containing two rules with the same name, and identical inputs deliberately
+    hash to the same name."""
+    seen: set = set()
+    unique: List[str] = []
+    for rule in rules:
+        m = re.search(r'^rule\s+(\w+)', rule, re.MULTILINE)
+        name = m.group(1) if m else rule
+        if name not in seen:
+            seen.add(name)
+            unique.append(rule)
+    return unique
+
+
 def save_results(results: List[Dict], ai_yara_rules: List[str] = None,
                  ai_yara_summary: Dict = None):
     if not results:
         logging.warning("No results were generated. Skipping output file creation.")
         return
-    session_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    session_path = os.path.join(OUTPUT_ROOT, f"session_{session_id}")
-    os.makedirs(session_path, exist_ok=True)
+    # Timestamps have one-second resolution; two runs started in the same
+    # second must get separate folders, never silently merge into one.
+    base_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    session_id = base_id
+    suffix = 1
+    while True:
+        session_path = os.path.join(OUTPUT_ROOT, f"session_{session_id}")
+        try:
+            os.makedirs(session_path)
+            break
+        except FileExistsError:
+            suffix += 1
+            session_id = f"{base_id}_{suffix:02d}"
     try:
         # Findings can contain sensitive input; restrict to owner. No-op on Windows.
         os.chmod(session_path, 0o700)
@@ -704,7 +783,10 @@ def save_results(results: List[Dict], ai_yara_rules: List[str] = None,
                   "w", encoding="utf-8") as f:
             json.dump(contextual_indicators, f, indent=2)
 
-    all_yara_rules = [res['yara_rule'] for res in results if res['yara_rule']]
+    # Duplicate inputs produce identically-named rules; YARA rejects a file
+    # with duplicated identifiers, so dedupe by rule name before writing.
+    all_yara_rules = _dedupe_yara_rules(
+        res['yara_rule'] for res in results if res['yara_rule'])
     if all_yara_rules:
         with open(os.path.join(session_path, "_all_yara_rules.yara"),
                   "w", encoding="utf-8") as f:
@@ -718,7 +800,7 @@ def save_results(results: List[Dict], ai_yara_rules: List[str] = None,
         with open(os.path.join(session_path, "_ai_yara_NEEDS_REVIEW.yara"),
                   "w", encoding="utf-8") as f:
             f.write(quarantine_header(model_label, session_id))
-            f.write("\n".join(ai_yara_rules))
+            f.write("\n".join(_dedupe_yara_rules(ai_yara_rules)))
         logging.warning("Wrote %d AI-drafted rule(s) to _ai_yara_NEEDS_REVIEW.yara "
                         "(review required; NOT deployable as-is).",
                         len(ai_yara_rules))
@@ -762,6 +844,15 @@ def save_results(results: List[Dict], ai_yara_rules: List[str] = None,
     logging.info("All output files saved successfully.")
 
 
+def _md_inline(value: str) -> str:
+    """Neutralize attacker-controlled text for inline display in the markdown
+    report: control characters (incl. newlines from JSON/CSV inputs) collapse to
+    a space so hostile input cannot break out of its line and forge report
+    structure; backticks are swapped out so it cannot escape its code span."""
+    value = re.sub(r'[\x00-\x1f\x7f]+', ' ', value)
+    return value.replace('`', "'")
+
+
 def generate_summary_report(results: List[Dict], stats: Dict, path: str,
                             ai_yara_summary: Dict = None):
     report_lines = [f"# Threat Enrichment Report: {stats['session_id']}", ""]
@@ -798,7 +889,7 @@ def generate_summary_report(results: List[Dict], stats: Dict, path: str,
         report_lines.append("No HIGH or CRITICAL risk items found.")
     else:
         for item in high_risk_items[:20]:
-            report_lines.append(f"### Input: `{item['input'][:200]}`")
+            report_lines.append(f"### Input: `{_md_inline(item['input'][:200])}`")
             report_lines.append(
                 f"- **Risk Score:** {item['analysis']['risk_score']} "
                 f"({item['analysis']['risk_level']})")
@@ -807,7 +898,8 @@ def generate_summary_report(results: List[Dict], stats: Dict, path: str,
                 report_lines.append("- **Indicators:**")
                 for ind_type, ind_list in item['indicators'].items():
                     report_lines.append(
-                        f"  - {ind_type.capitalize()}: `{', '.join(ind_list)}`")
+                        f"  - {ind_type.capitalize()}: "
+                        f"`{_md_inline(', '.join(ind_list))}`")
             if item['mitre_matches']:
                 report_lines.append("- **MITRE TTPs:**")
                 for match in item['mitre_matches']:

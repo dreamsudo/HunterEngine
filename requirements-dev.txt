@@ -1,0 +1,15 @@
+# Development / test / optional-feature dependencies.
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   pytest
+-r requirements.txt
+
+# Test tooling
+pytest==9.1.1
+pyflakes==3.4.0
+
+# Optional feature: --ai-yara compile gate (also exercised by the test suite)
+yara-python==4.5.4
+
+# Optional feature: generate_report.py charts
+matplotlib==3.11.1
+numpy==2.5.1

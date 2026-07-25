@@ -41,6 +41,7 @@ import os
 import re
 import json
 import logging
+import ipaddress
 import urllib.parse
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any
@@ -167,9 +168,19 @@ def _redact(s: str) -> str:
 
 
 def _is_local_url(url: str) -> bool:
+    """True only for loopback endpoints. Anything that could leave this machine
+    (including .local mDNS names, which resolve to OTHER hosts on the LAN)
+    requires the explicit HUNTER_AI_ALLOW_REMOTE=1 opt-in — the guard exists to
+    stop potentially-PII-laden input leaving the box silently, so it fails
+    closed."""
     host = (urllib.parse.urlparse(url).hostname or "").lower()
-    return (host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
-            or host.endswith(".local"))
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_unspecified
 
 
 def _build_user_message(item: Dict[str, Any], max_input_chars: int) -> str:
@@ -208,18 +219,25 @@ def _extract_json(text: str) -> Optional[dict]:
         return None
 
 
+def _clean_field(value: Any, limit: int) -> str:
+    """Model output is untrusted: collapse all whitespace (incl. newlines) so it
+    cannot break out of its single line in the markdown report and forge report
+    structure (fake headings, fake findings)."""
+    return re.sub(r"\s+", " ", str(value)).strip()[:limit]
+
+
 def _validate(obj: Optional[dict]) -> Optional[dict]:
     if not isinstance(obj, dict):
         return None
-    summary = str(obj.get("summary", "")).strip()[:600]
+    summary = _clean_field(obj.get("summary", ""), 600)
     if not summary:
         return None
-    notes = str(obj.get("analyst_notes", "")).strip()[:1200]
+    notes = _clean_field(obj.get("analyst_notes", ""), 1200)
     injection = bool(obj.get("injection_observed", False))
     actions = obj.get("recommended_actions", [])
     if not isinstance(actions, list):
         actions = []
-    actions = [str(a).strip()[:200] for a in actions if str(a).strip()][:6]
+    actions = [_clean_field(a, 200) for a in actions if _clean_field(a, 200)][:6]
     return {
         "summary": summary,
         "injection_observed": injection,

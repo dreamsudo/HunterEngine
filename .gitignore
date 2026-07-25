@@ -55,7 +55,11 @@ __pycache__/
 # ---- Optional: uncomment if test_input.txt holds REAL/sensitive samples ----
 # test_input.txt
 
-# ---- KEEP the README screenshots (override the output-dir ignores above) ----
+# ---- KEEP the README/MANUAL visuals (override the output-dir ignores above) ----
 !docs/
 !docs/images/
 !docs/images/*.png
+!docs/images/*.svg
+
+# ---- Claude Code local session config ----
+.claude/

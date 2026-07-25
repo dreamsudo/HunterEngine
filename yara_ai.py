@@ -27,14 +27,12 @@ Returns (rule_texts, summary) so the caller can SEE what happened:
 from __future__ import annotations
 
 import re
-import json
 import hashlib
 import logging
-from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
 from ai_enrichment import (
-    build_provider_from_env, _extract_json, _redact, _defang, ONLY_LEVELS,
+    build_provider_from_env, _extract_json, _redact, ONLY_LEVELS,
 )
 
 log = logging.getLogger("hunter.yara_ai")
@@ -122,9 +120,9 @@ def _assemble_rule(item: Dict[str, Any], strings: List[str],
     rule_name = f"ai_draft_{safe}_{digest}"
 
     meta_lines = [
-        f'\t\t_generated_by = "AI-DRAFT (compile-checked, NOT validated)"',
+        '\t\t_generated_by = "AI-DRAFT (compile-checked, NOT validated)"',
         f'\t\t_model = "{_sanitize_yara_string(model_label)}"',
-        f'\t\t_review = "REQUIRED before deployment"',
+        '\t\t_review = "REQUIRED before deployment"',
         f'\t\trisk_level = "{item["analysis"]["risk_level"]}"',
         f'\t\trisk_score = "{item["analysis"]["risk_score"]}"',
         f'\t\tinput_text = "{_sanitize_yara_string(item["input"][:512])}"',
@@ -141,8 +139,8 @@ def _assemble_rule(item: Dict[str, Any], strings: List[str],
 
     return (
         f"rule {rule_name}\n{{\n"
-        f"    meta:\n" + "\n".join(meta_lines) + "\n"
-        f"    strings:\n" + "\n".join(string_lines) + "\n"
+        "    meta:\n" + "\n".join(meta_lines) + "\n"
+        "    strings:\n" + "\n".join(string_lines) + "\n"
         f"    condition:\n        {condition}\n}}\n"
     )
 
@@ -184,10 +182,18 @@ def draft_ai_yara(results: List[Dict[str, Any]]) -> Tuple[List[str], Dict[str, A
 
     rule_texts: List[str] = []
     calls = 0
+    drafted_inputs: set = set()
     for item in targets:
         if calls >= cfg["max_calls"]:
             log.info("AI-YARA call budget (%d) reached.", cfg["max_calls"])
             break
+        # Identical inputs would draft an identically-named rule (and burn a
+        # provider call for it); one draft per distinct input is enough.
+        digest = hashlib.sha1(
+            item["input"].encode("utf-8", "ignore")).hexdigest()
+        if digest in drafted_inputs:
+            continue
+        drafted_inputs.add(digest)
         try:
             raw = provider.complete(
                 YARA_DRAFT_SYSTEM_PROMPT,
