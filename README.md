@@ -90,11 +90,6 @@ Lateral Movement ↔ Impact show the expected strong positive correlation.)
 
 ![Tactic co-occurrence correlation matrix](docs/images/06_tactic_correlation.png)
 
-### Risk severity distribution
-
-A quick severity overview for non-technical readers.
-
-![Risk severity distribution donut](docs/images/05_risk_distribution.png)
 
 > Alongside these charts the report also writes `EXECUTIVE_SUMMARY.txt`
 > (plain-language brief) and `findings_stix_bundle.json` (STIX 2.1, validated
