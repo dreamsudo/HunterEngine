@@ -71,12 +71,6 @@ canonical order.
 
 ![ATT&CK tactic coverage in kill-chain order](docs/images/02_tactic_coverage.png)
 
-### Severity distribution by tactic
-
-How severity breaks down across tactics. (In this sample every case is CRITICAL;
-on a varied corpus this becomes a multi-color stacked breakdown.)
-
-![Severity distribution by ATT&CK tactic](docs/images/03_severity_by_tactic.png)
 
 ### Case × tactic heatmap (anonymized)
 
