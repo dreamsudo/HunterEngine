@@ -94,7 +94,9 @@ and tactics come from the real dataset, not from anywhere else.
 
 ### Requirements
 
-- Python 3.10+ (CI-tested on 3.10 and 3.12)
+- **Engine core:** Python 3.10+ (CI smoke-tests 3.10)
+- **Dev/test toolchain** (`requirements-dev.txt`: pytest, reporting charts):
+  Python 3.12 — the pinned numpy/matplotlib releases require it
 - The Python packages in `requirements.txt`:
   `requests`, `tqdm`, `rapidfuzz`, `stix2`
 - Optional, feature-gated:
@@ -623,7 +625,7 @@ Three layers, each catching what the others can't:
 flowchart TD
     A["tests/ - 62 offline unit tests<br/>fixtures for MITRE data, stubbed AI providers<br/>encodes security + regression invariants"]
     B["run_pipeline_test.sh - end-to-end harness<br/>4 real engine runs: offline / AI-YARA / cloud / local"]
-    C["CI - .github/workflows/ci.yml<br/>pyflakes + pytest on Python 3.10 and 3.12, every push"]
+    C["CI - .github/workflows/ci.yml<br/>full suite on 3.12 + core smoke on 3.10, every push"]
     A --> C
     A -- "fast, every change" --> D[Ship]
     B -- "full install validation" --> D
@@ -637,7 +639,7 @@ fixtures, AI providers stubbed in-process. It encodes the project's security
 invariants: fail-closed ATT&CK mapping, YARA/STIX/markdown injection
 resistance, the AI egress guard, output dedup, and the mandatory AI-YARA
 compile gate. CI (`.github/workflows/ci.yml`) runs it with `pyflakes` on every
-push.
+push (full suite on Python 3.12, plus a 3.10 core-compatibility smoke job).
 
 ```bash
 pip install -r requirements-dev.txt
